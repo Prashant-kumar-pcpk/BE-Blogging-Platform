@@ -60,6 +60,10 @@ const userSchema = new mongoose.Schema({
   subscribedCategories: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Category'
+  }],
+  bookmarks: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Post'
   }]
 }, {
   timestamps: true

@@ -19,7 +19,7 @@ const postSchema = new mongoose.Schema({
   },
   excerpt: {
     type: String,
-    maxlength: [300, 'Excerpt cannot exceed 300 characters']
+    maxlength: [100000, 'Excerpt cannot exceed 100000 characters']
   },
   featuredImage: {
     type: String,
@@ -83,6 +83,10 @@ const postSchema = new mongoose.Schema({
   }],
   publishedAt: {
     type: Date
+  },
+  readingTime: {
+    type: Number,
+    default: 1
   },
   seoTitle: String,
   seoDescription: String,
