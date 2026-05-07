@@ -31,14 +31,16 @@ const getPublishedPosts = asyncHandler(async (req, res) => {
   const searchQuery = req.query.q?.trim();
   const categoryFilter = req.query.category?.trim();
   const tagFilter = req.query.tag?.trim();
+  const authorFilter = req.query.author?.trim();
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;
 
   const filter = { status: 'published' };
-  const [categoryDoc, tagDoc] = await Promise.all([
+  const [categoryDoc, tagDoc, authorDoc] = await Promise.all([
     categoryFilter ? Category.findOne({ slug: categoryFilter.toLowerCase() }) : null,
-    tagFilter ? Tag.findOne({ slug: tagFilter.toLowerCase() }) : null
+    tagFilter ? Tag.findOne({ slug: tagFilter.toLowerCase() }) : null,
+    authorFilter ? User.findOne({ username: new RegExp(`^${authorFilter}$`, 'i') }) : null
   ]);
 
   if (categoryFilter && !categoryDoc) {
@@ -69,12 +71,30 @@ const getPublishedPosts = asyncHandler(async (req, res) => {
     });
   }
 
+  if (authorFilter && !authorDoc) {
+    return res.json({
+      posts: [],
+      pagination: {
+        page,
+        limit,
+        total: 0,
+        totalPages: 0,
+        hasNextPage: false,
+        hasPrevPage: false
+      }
+    });
+  }
+
   if (categoryDoc) {
     filter.category = categoryDoc._id;
   }
 
   if (tagDoc) {
     filter.tags = tagDoc._id;
+  }
+
+  if (authorDoc) {
+    filter.author = authorDoc._id;
   }
 
   let posts;
@@ -90,7 +110,7 @@ const getPublishedPosts = asyncHandler(async (req, res) => {
       .sort({ score: { $meta: 'textScore' } })
       .skip(skip)
       .limit(limit)
-      .populate('author', 'username profilePicture')
+      .populate('author', 'username profilePicture bio socialLinks')
       .populate('category', 'name color slug')
       .populate('tags', 'name slug');
 
@@ -109,7 +129,7 @@ const getPublishedPosts = asyncHandler(async (req, res) => {
         .sort({ publishedAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('author', 'username profilePicture')
+        .populate('author', 'username profilePicture bio socialLinks')
         .populate('category', 'name color slug')
         .populate('tags', 'name slug');
     }
@@ -119,7 +139,7 @@ const getPublishedPosts = asyncHandler(async (req, res) => {
       .sort({ publishedAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('author', 'username profilePicture')
+      .populate('author', 'username profilePicture bio socialLinks')
       .populate('category', 'name color slug')
       .populate('tags', 'name slug');
   }
@@ -148,25 +168,88 @@ const getPostsByTag = asyncHandler(async (req, res) => {
 
   const posts = await Post.find({ tags: tag._id, status: 'published' })
     .sort({ publishedAt: -1 })
-    .populate('author', 'username profilePicture')
+    .populate('author', 'username profilePicture bio socialLinks')
     .populate('category', 'name color slug')
     .populate('tags', 'name slug');
 
   res.json({ tag, posts });
 });
 
+const getAuthors = asyncHandler(async (req, res) => {
+  const posts = await Post.find({ status: 'published' })
+    .select('author views publishedAt')
+    .populate('author', 'username profilePicture bio socialLinks createdAt');
+
+  const authorsMap = new Map();
+
+  posts.forEach((post) => {
+    if (!post.author?._id) {
+      return;
+    }
+
+    const authorId = post.author._id.toString();
+    const existingAuthor = authorsMap.get(authorId);
+
+    if (existingAuthor) {
+      existingAuthor.postCount += 1;
+      existingAuthor.viewsCount += post.views || 0;
+      existingAuthor.lastPublishedAt = post.publishedAt || existingAuthor.lastPublishedAt;
+      return;
+    }
+
+    authorsMap.set(authorId, {
+      _id: post.author._id,
+      username: post.author.username,
+      profilePicture: post.author.profilePicture || '',
+      bio: post.author.bio || '',
+      socialLinks: post.author.socialLinks || {},
+      joinedAt: post.author.createdAt,
+      postCount: 1,
+      viewsCount: post.views || 0,
+      lastPublishedAt: post.publishedAt || null
+    });
+  });
+
+  const authors = Array.from(authorsMap.values()).sort((firstAuthor, secondAuthor) => {
+    if (secondAuthor.postCount !== firstAuthor.postCount) {
+      return secondAuthor.postCount - firstAuthor.postCount;
+    }
+
+    return (secondAuthor.viewsCount || 0) - (firstAuthor.viewsCount || 0);
+  });
+
+  res.json(authors);
+});
+
 const getUserPosts = asyncHandler(async (req, res) => {
   const posts = await Post.find({ author: req.user._id })
     .sort({ updatedAt: -1 })
+    .populate('author', 'username profilePicture bio socialLinks')
     .populate('category', 'name color slug')
     .populate('tags', 'name slug');
 
   res.json(posts);
 });
 
+const getUserPostById = asyncHandler(async (req, res) => {
+  const post = await Post.findOne({
+    _id: req.params.postId,
+    author: req.user._id
+  })
+    .populate('author', 'username profilePicture bio socialLinks')
+    .populate('category', 'name color slug')
+    .populate('tags', 'name slug');
+
+  if (!post) {
+    return res.status(404).json({ message: 'Post not found' });
+  }
+
+  res.json(post);
+});
+
 const getPostBySlug = asyncHandler(async (req, res) => {
   const post = await Post.findOne({ slug: req.params.slug, status: 'published' })
-    .populate('author', 'username profilePicture bio')
+    .populate('author', 'username profilePicture bio socialLinks')
     .populate('category', 'name color slug')
     .populate('tags', 'name slug');
 
@@ -189,7 +272,7 @@ const getPostsByCategory = asyncHandler(async (req, res) => {
 
   const posts = await Post.find({ category: category._id, status: 'published' })
     .sort({ publishedAt: -1 })
-    .populate('author', 'username profilePicture')
+    .populate('author', 'username profilePicture bio socialLinks')
     .populate('category', 'name color slug')
     .populate('tags', 'name slug');
 
@@ -217,7 +300,7 @@ const getRelatedPosts = asyncHandler(async (req, res) => {
   })
     .sort({ publishedAt: -1 })
     .limit(3)
-    .populate('author', 'username profilePicture')
+    .populate('author', 'username profilePicture bio socialLinks')
     .populate('category', 'name color slug')
     .populate('tags', 'name slug');
 
@@ -226,8 +309,8 @@ const getRelatedPosts = asyncHandler(async (req, res) => {
 
 const getAuthorProfileByUsername = asyncHandler(async (req, res) => {
   const author = await User.findOne({ username: req.params.username })
-    .populate('followers', 'username profilePicture')
-    .populate('following', 'username profilePicture');
+    .populate('followers', 'username profilePicture bio socialLinks')
+    .populate('following', 'username profilePicture bio socialLinks');
 
   if (!author) {
     return res.status(404).json({ message: 'Author not found' });
@@ -235,6 +318,7 @@ const getAuthorProfileByUsername = asyncHandler(async (req, res) => {
 
   const posts = await Post.find({ author: author._id, status: 'published' })
     .sort({ publishedAt: -1 })
+    .populate('author', 'username profilePicture bio socialLinks')
     .populate('category', 'name color slug')
     .populate('tags', 'name slug');
 
@@ -321,6 +405,100 @@ const createPost = asyncHandler(async (req, res) => {
   await Promise.all(tagDocs.map((tag) => tag.updatePostCount()));
 
   res.status(201).json(post);
+});
+
+const updatePost = asyncHandler(async (req, res) => {
+  const post = await Post.findOne({
+    _id: req.params.postId,
+    author: req.user._id
+  });
+
+  if (!post) {
+    return res.status(404).json({ message: 'Post not found' });
+  }
+
+  const { title, content, excerpt, categoryName, tags, status, featuredImage, media } = req.body;
+  const trimmedTitle = title?.trim() || '';
+  const trimmedContent = content?.trim() || '';
+  const trimmedExcerpt = excerpt?.trim() || '';
+  const emptyContent = trimmedContent === '<p><br></p>' || trimmedContent === '<div><br></div>';
+  const nextStatus = status || post.status || 'draft';
+
+  if (!trimmedTitle || !trimmedContent || emptyContent) {
+    return res.status(400).json({ message: 'Title and content are required.' });
+  }
+
+  if (trimmedExcerpt.length > 100000) {
+    return res.status(400).json({ message: 'Excerpt cannot exceed 100000 characters.' });
+  }
+
+  const categoryLabel = categoryName?.trim() || 'General';
+  let category = await Category.findOne({ name: new RegExp(`^${categoryLabel}$`, 'i') });
+  if (!category) {
+    category = await Category.create({
+      name: categoryLabel,
+      createdBy: req.user._id
+    });
+  }
+
+  const tagNames = Array.isArray(tags)
+    ? tags
+    : (tags || '').split(',').map((tag) => tag.trim()).filter(Boolean);
+
+  const tagDocs = await Promise.all(
+    tagNames.map(async (tagName) => {
+      let tag = await Tag.findOne({ name: new RegExp(`^${tagName}$`, 'i') });
+      if (!tag) {
+        tag = await Tag.create({ name: tagName });
+      }
+      return tag;
+    })
+  );
+
+  const normalizedMedia = Array.isArray(media)
+    ? media
+        .filter((item) => item?.url && item?.type)
+        .map((item) => ({
+          url: item.url,
+          type: item.type,
+          name: item.name || ''
+        }))
+    : [];
+
+  const previousCategoryId = post.category?.toString();
+  const previousTagIds = Array.isArray(post.tags) ? post.tags.map((tagId) => tagId.toString()) : [];
+
+  post.title = trimmedTitle;
+  post.content = content;
+  post.excerpt = trimmedExcerpt;
+  post.category = category._id;
+  post.tags = tagDocs.map((tag) => tag._id);
+  post.status = nextStatus;
+  post.media = normalizedMedia;
+  post.featuredImage = featuredImage || normalizedMedia.find((item) => item.type === 'image')?.url || '';
+  post.readingTime = calculateReadingTime(trimmedContent);
+
+  await post.save();
+
+  if (previousCategoryId && previousCategoryId !== category._id.toString()) {
+    const previousCategory = await Category.findById(previousCategoryId);
+    if (previousCategory) {
+      await previousCategory.updatePostCount();
+    }
+  }
+
+  await category.updatePostCount();
+
+  const allRelevantTagIds = [...new Set([...previousTagIds, ...tagDocs.map((tag) => tag._id.toString())])];
+  const allRelevantTags = await Tag.find({ _id: { $in: allRelevantTagIds } });
+  await Promise.all(allRelevantTags.map((tag) => tag.updatePostCount()));
+
+  const updatedPost = await Post.findById(post._id)
+    .populate('author', 'username profilePicture bio socialLinks')
+    .populate('category', 'name color slug')
+    .populate('tags', 'name slug');
+
+  res.json(updatedPost);
 });
 
 const getPostComments = asyncHandler(async (req, res) => {
@@ -657,13 +835,16 @@ const deleteCategory = asyncHandler(async (req, res) => {
 
 module.exports = {
   getPublishedPosts,
+  getAuthors,
   getUserPosts,
+  getUserPostById,
   getPostBySlug,
   getPostsByCategory,
   getPostsByTag,
   getRelatedPosts,
   getAuthorProfileByUsername,
   createPost,
+  updatePost,
   getCategories,
   getTags,
   createCategory,

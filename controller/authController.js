@@ -19,7 +19,10 @@ const sanitizeAuthUser = (user) => ({
   role: user.role,
   bio: user.bio,
   profilePicture: user.profilePicture,
-  socialLinks: user.socialLinks
+  socialLinks: user.socialLinks,
+  followers: user.followers || [],
+  following: user.following || [],
+  subscribedCategories: user.subscribedCategories || []
 });
 
 // @desc    Register user
@@ -95,19 +98,26 @@ const login = asyncHandler(async (req, res) => {
   // Check for user
   const user = await User.findOne({ email }).select('+password');
 
-  if (user && (await user.comparePassword(password))) {
-    const token = generateToken(user._id);
-    const refreshToken = generateRefreshToken(user._id);
-
-    res.json({
-      message: 'Login successful',
-      user: sanitizeAuthUser(user),
-      token,
-      refreshToken
-    });
-  } else {
-    res.status(401).json({ message: 'Invalid email or password' });
+  if (!user) {
+    return res.status(404).json({ message: 'No account found for this email address.' });
   }
+
+  const passwordMatches = await user.comparePassword(password);
+  if (!passwordMatches) {
+    return res.status(401).json({
+      message: 'Incorrect password. Use Forgot Password to reset it.'
+    });
+  }
+
+  const token = generateToken(user._id);
+  const refreshToken = generateRefreshToken(user._id);
+
+  res.json({
+    message: 'Login successful',
+    user: sanitizeAuthUser(user),
+    token,
+    refreshToken
+  });
 });
 
 // @desc    Refresh access token
@@ -296,7 +306,9 @@ const resetPassword = asyncHandler(async (req, res) => {
   user.password = newPassword;
   await user.save();
 
-  res.json({ message: 'Password reset successfully. Please sign in with your new password.' });
+  res.json({
+    message: 'Password reset successfully. Please sign in with your new password.'
+  });
 });
 
 // @desc    Follow user
